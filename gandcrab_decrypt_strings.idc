@@ -153,25 +153,50 @@ static get_string_argument(ref) {
     return argument;
 }
 
-static get_function_with_max_xrefs() {
-    auto addr, ref, count, max_addr, max=0;
-    addr = NextFunction(0);
-    while (addr!=BADADDR) {
-        count = 0;
-        ref = RfirstB(addr);
-        while (ref!=BADADDR) {
-            count = count + 1;
-            ref = RnextB(addr,ref);
-        }
-        //Message("%08x: %d, %x\n", addr, count,GetFunctionAttr(addr,FUNCATTR_FRSIZE));
-        if (count > max) {
-            max = count;
-            max_addr = addr;
-        }        
-        addr = NextFunction(addr);
+static count_xrefs(addr) {
+    auto ref, count;
+    count = 0;
+    ref = RfirstB(addr);
+    while (ref!=BADADDR) {
+        count = count + 1;
+        ref = RnextB(addr,ref);
     }
     
-    return max_addr;
+    //Message("%08x: %d, %x\n", addr, count,GetFunctionAttr(addr,FUNCATTR_FRSIZE));
+    return count;
+}
+
+static find_decrypt_function() {
+    // find the address of the string decryption function with following conditions:
+    //   it is short (up to 0x25 bytes)
+    //   it is heavily used (at least 100 xrefs)
+    //   it contains exactly one call instruction (for calling RC4 decryption routine)
+    //   it contains exactly 5 push instructions (one push ebp from prologue and 4 arguments for RC4)
+    auto func_start, func_end, found;
+    found = 0;
+    func_start = NextFunction(0);
+    while ((func_start!=BADADDR) && (found == 0)) {
+        func_start = NextFunction(func_start);
+        func_end = FindFuncEnd(func_start);
+        if (func_end-func_start < 0x25) {
+            auto  addr, push_count, call_count;
+            push_count = 0;
+            call_count = 0;
+            addr = func_start;
+            while (addr < func_end) {
+                if (GetMnem(addr) == "push") push_count = push_count + 1;
+                if (GetMnem(addr) == "call") call_count = call_count + 1;
+                addr = FindCode(addr, SEARCH_DOWN | SEARCH_NEXT);                            
+            }
+        
+            if ((push_count == 5) && (call_count == 1) && (count_xrefs(func_start) > 100))  {
+                found = 1;
+            }
+        }
+        //Message("%08x: %08x, %d --> %d\n", func_start, func_end, count_xrefs(func_start), found);               
+    }
+    
+    return func_start;
 }
 
 
@@ -179,8 +204,8 @@ static main() {
     Message("\n=====GandCrab String Decryptor=====\n\n");
     auto ea, ref;
     // string decrypt function
-    ea = 0x10009E69;
-    ea = get_function_with_max_xrefs();
+    //ea = 0x407563;
+    ea = find_decrypt_function();
     // get first xref to calling decrypt function
     ref = RfirstB(ea);
     while (ref!=BADADDR) {
